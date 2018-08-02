@@ -1,0 +1,331 @@
+
+## Required Packages
+```{r}
+require(prophet)
+require(dplyr)
+require(xts)
+require(highcharter)
+require(ggplot2)
+require(tidyr)
+require(viridis)
+require(plotly)
+require(lubridate)
+require(data.table)
+require(randomForest)
+require(class)
+```
+
+## Preparing Dataset
+```{r}
+chic_crime_2008_2011 <- read.csv("D:/Study/Northeastern/Fall-2017/DM-ML/Homework/Project/Dataset/Chicago_Crimes_2008_to_2011.csv")
+chic_crime_2012_2016 <- read.csv("D:/Study/Northeastern/Fall-2017/DM-ML/Homework/Project/Dataset/Chicago_Crimes_2012_to_2016.csv")
+chic_crime_2012_2016<- chic_crime_2012_2016[!chic_crime_2012_2016$Year > 2016,]
+chic_crime <- rbind(chic_crime_2008_2011, chic_crime_2012_2016)
+```
+
+## Creating data factors
+```{r}
+chic_crime$Date <- as.Date(chic_crime$Date, "%m/%d/%Y %I:%M:%S %p")
+chic_crime$Day <- factor(day(as.POSIXlt(chic_crime$Date, format="%m/%d/%Y %I:%M:%S %p")))
+chic_crime$Month <- factor(month(as.POSIXlt(chic_crime$Date, format="%m/%d/%Y %I:%M:%S %p")))
+chic_crime$Year <- factor(year(as.POSIXlt(chic_crime$Date, format="%m/%d/%Y %I:%M:%S %p")))
+chic_crime$Weekday <- factor(wday(as.POSIXlt(chic_crime$Date, format="%m/%d/%Y %I:%M:%S %p")))
+```
+
+## Grouping the dataset on various parameters
+```{r}
+by_Date <- (chic_crime) %>% group_by(Date) %>% summarise(Total = n())
+by_Date<- na.omit(by_Date)
+by_year <- chic_crime %>% group_by(Year) %>% summarise(Total = n()) %>% arrange(desc(Total))
+arrest_by_Date <- (chic_crime[chic_crime$Arrest == 'True',]) %>% group_by(Date) %>% summarise(Total = n())
+by_arrest <- chic_crime %>% group_by(Arrest) %>% summarise(Total = n()) %>% arrange(desc(Total))
+by_arrest<- na.omit(by_arrest)
+crime_by_Date <- chic_crime %>% group_by(Date) %>% summarise(Total = n())
+crime_by_Date<-na.omit(crime_by_Date)
+by_location <- chic_crime %>% group_by(Location.Description) %>% summarise(Total = n()) %>% arrange(desc(Total))
+by_type <- chic_crime %>% group_by(Primary.Type) %>% summarise(Total = n()) %>% arrange(desc(Total))
+crime_count_month <- chic_crime %>% group_by(Month) %>% summarise(Total = n())
+crime_count_month<- na.omit(crime_count_month)
+months <- c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")
+crime_count_month$Month <- months[ crime_count_month$Month ]
+crime_count_week <- chic_crime %>% group_by(Weekday) %>% summarise(Total = n())
+crime_count_week<- na.omit(crime_count_week)
+weekdays <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
+crime_count_week$Weekday <- weekdays[ crime_count_week$Weekday ]
+crime_count_day <- chic_crime %>% group_by(Day) %>% summarise(Total = n())
+crime_count_day<- na.omit(crime_count_day)
+theft <- chic_crime[chic_crime$Primary.Type=="THEFT",]
+chic_crime_theft <-  theft %>% group_by(Year, Primary.Type) %>% summarise(Total = n())
+chic_crime_theft<- na.omit(chic_crime_theft)
+battery <- chic_crime[chic_crime$Primary.Type=="BATTERY",]
+chic_crime_battery <-  battery %>% group_by(Year, Primary.Type) %>% summarise(Total = n())
+chic_crime_battery<- na.omit(chic_crime_battery)
+criminal <- chic_crime[chic_crime$Primary.Type=="CRIMINAL DAMAGE",]
+chic_crime_criminal <-  criminal %>% group_by(Year, Primary.Type) %>% summarise(Total = n())
+chic_crime_criminal<- na.omit(chic_crime_criminal)
+narcotics <- chic_crime[chic_crime$Primary.Type=="NARCOTICS",]
+chic_crime_narcotics <-  narcotics %>% group_by(Year, Primary.Type) %>% summarise(Total = n())
+chic_crime_narcotics<- na.omit(chic_crime_narcotics)
+chic_crime_type <- rbind(chic_crime_theft, chic_crime_battery, chic_crime_criminal, chic_crime_narcotics)
+streets <- chic_crime[chic_crime$Location.Description=="STREET",]
+chic_crime_street <-  streets %>% group_by(Year, Location.Description) %>% summarise(Total = n())
+chic_crime_street<- na.omit(chic_crime_street)
+residence <- chic_crime[chic_crime$Location.Description=="RESIDENCE",]
+chic_crime_residence <-  residence %>% group_by(Year, Location.Description) %>% summarise(Total = n())
+chic_crime_residence<- na.omit(chic_crime_residence)
+apt <- chic_crime[chic_crime$Location.Description=="APARTMENT",]
+chic_crime_apt <-  apt %>% group_by(Year, Location.Description) %>% summarise(Total = n())
+chic_crime_apt<- na.omit(chic_crime_apt)
+sidewalk <- chic_crime[chic_crime$Location.Description=="SIDEWALK",]
+chic_crime_sidewalk <-  sidewalk %>% group_by(Year, Location.Description) %>% summarise(Total = n())
+chic_crime_sidewalk<- na.omit(chic_crime_sidewalk)
+chic_crime_loc <- rbind(chic_crime_street, chic_crime_residence, chic_crime_apt, chic_crime_sidewalk)
+homicide <- chic_crime[chic_crime$Primary.Type=="HOMICIDE",] 
+homicide_by_year <-  homicide %>% group_by(Year) %>% summarise(Total = n())
+```
+
+## Creating Time Series
+```{r}
+date_tseries <- xts(by_Date$Total, order.by=as.POSIXct(by_Date$Date))
+arrest_tseries <- xts(arrest_by_Date$Total, order.by=as.POSIXct(by_Date$Date))
+```
+
+# Plotting the Time Series Graph
+
+## Plot for Crimes and Arrest since 2008-2016
+```{r}
+hchart(date_tseries, name = "Crimes") %>% 
+  hc_add_series(arrest_tseries, name = "Arrests") %>%
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_title(text = "Times Series plot of Chicago Crimes and Arrests [2008 -2016]") %>%
+  hc_legend(enabled = TRUE)
+```
+  
+## Plot for Arrests made since 2008-2016
+```{r}
+hchart(arrest_tseries) %>%
+  hc_add_theme(hc_theme_economist()) %>%
+  hc_title(text = "Times Series plot of Arrests made in Chicago [2008 -2016]")
+```
+  
+## Crimes by Year and Month since 2008-2016
+```{r}
+crime_count <- chic_crime %>% group_by(Year, Month) %>% summarise(Total = n())
+crime_count<- na.omit(crime_count)
+crime <- ggplot(crime_count, aes(Year, Month, fill = Total)) +
+  geom_tile(size = 1, color = "white") +
+  theme_classic() +
+  geom_text(aes(label=Total), color='white') +
+  ggtitle("Crimes by Year and Month[2008-2016]")
+plot(crime)
+```
+  
+## Arrests by Year and Month since 2008-2016
+```{r}
+arrest_data <- (chic_crime[chic_crime$Arrest == 'True',])
+arrest_count <- arrest_data %>% group_by(Year, Month) %>% summarise(Total = n())
+arrest_count<- na.omit(arrest_count)
+arrest <- ggplot(arrest_count, aes(Year, Month, fill = Total)) +
+  geom_tile(size = 1, color = "white") +
+  theme_classic() +
+  scale_fill_viridis()  +
+  geom_text(aes(label=Total), color='white') +
+  ggtitle("Arrests by Year and Month [2008-2016]")
+plot(arrest)
+```
+
+## Types of Crimes since 2008-2016
+```{r}
+hchart(by_type[1:10,],'column', hcaes(x = Primary.Type, y = Total, color = Total)) %>%
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_plotOptions(column = list(stacking = 'normal')) %>%
+  hc_legend(align = 'right', float = T)%>%
+  hc_title(text = "Top 10 types of crime")
+```
+
+## Major Crime Types since 2008-2016
+```{r}
+hchart(by_type[1:10,], 'pie', hcaes(x = Primary.Type, y = Total, color = Total)) %>%
+  hc_add_theme(hc_theme_google()) %>%
+  hc_title(text = "Top 10 major crime") 
+```
+
+```{r}
+hchart(chic_crime_type,'line', hcaes(x = Year, y = Total, group = Primary.Type)) %>%
+  hc_add_theme(hc_theme_google()) %>%
+  hc_plotOptions(column = list(stacking = 'normal')) %>%
+  hc_legend(align = 'right', float = T)%>%
+  hc_title(text = "Major Crime Types")
+```
+  
+## Number of crimes by month of the year
+```{r}
+hchart(crime_count_month,'column', hcaes(x = Month, y = Total, color = Total)) %>%
+  hc_plotOptions(column = list(stacking = 'normal')) %>%
+  hc_legend(align = 'right', float = T)%>%
+  hc_title(text = "Number of crimes by month of the year")
+```
+
+## Number of crimes by Day of the Week
+```{r}
+hchart(crime_count_week,'column', hcaes(x = Weekday, y = Total, color = Total)) %>%
+  hc_plotOptions(column = list(stacking = 'normal')) %>%
+  hc_legend(align = 'right', float = T)%>%
+  hc_title(text = "Number of crimes by Day of the Week")
+```
+
+## Number of crimes by Day of the year
+```{r}
+hchart(crime_count_day,'column', hcaes(x = Day, y = Total, color = Total)) %>%
+  hc_plotOptions(column = list(stacking = 'normal')) %>%
+  hc_legend(align = 'right', float = T)%>%
+  hc_title(text = "Number of crimes by Day of the year")
+```
+
+## Crime count since 2008-2016
+```{r}
+crime_count <- chic_crime %>% group_by(Year) %>% summarise(Total = n())
+crime_count<- na.omit(crime_count)
+hchart(crime_count, "column", hcaes(Year,Total, color = Year)) %>%
+  hc_add_theme(hc_theme_gridlight()) %>%
+  hc_title(text = "Crime Count 2008-2016")
+```
+  
+## Arrest count since 2008-2016
+```{r}
+arrest_count <- arrest_data %>% group_by(Year) %>% summarise(Total = n())
+arrest_count<- na.omit(arrest_count)
+hchart(arrest_count, "column", hcaes(Year,Total, color = Year)) %>%
+  hc_add_theme(hc_theme_gridlight()) %>%
+  hc_title(text = "Arrest Count 2008-2016") 
+```
+ 
+## Types of Crime Location since 2008-2016
+```{r}
+hchart(by_location[1:10,], "column", hcaes(x = Location.Description, y = Total, color = Total)) %>%
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_title(text = "Top 10 Crime Locations") %>%
+  hc_legend(enabled = FALSE)
+```
+
+## Major Crime Locations by Year
+
+```{r}
+hchart(chic_crime_loc,'column', hcaes(x = Year, y = Total, group = Location.Description)) %>%
+  hc_add_theme(hc_theme_google()) %>%
+  hc_plotOptions(column = list(stacking = 'normal')) %>%
+  hc_legend(align = 'right', float = T)%>%
+  hc_title(text = "Major Crime Locations")
+```
+
+## Homicides in Chicago since 2008-2016
+```{r}
+hchart(homicide_by_year, "column", hcaes(Year, Total, color = Year)) %>%
+  hc_add_theme(hc_theme_flat()) %>%
+   hc_plotOptions(column = list(stacking = 'normal')) %>%
+  hc_legend(align = 'right', float = T)%>%
+  hc_title(text = "Homicide since 2008-2016")
+```
+
+```{r}
+homicide_count <- homicide %>% group_by(Year, Month) %>% summarise(Total = n())
+ggplot(homicide_count, aes(Year, Month, fill = Total)) +
+  geom_tile(size = 1, color = "white") +
+  theme_classic() +
+  geom_text(aes(label=Total), color='white') +
+  ggtitle("Homicides in Chicago since 2008-2016")
+```
+
+# Forecasting using Facebook's Prophet Package
+
+## Forecasting Crime in Chicago
+```{r}
+names(crime_by_Date) <- c("ds","y")
+df <- crime_by_Date %>%
+  mutate(y = log(y))
+m <- prophet(df)
+future <- make_future_dataframe(m, periods = 365)
+forecast <- predict(m, future)
+plot(m, forecast,ylab="log(Total_Crime)",xlab="Year")
+prophet_plot_components(m, forecast)
+```
+
+# For Random Forest and kNNN Algorithm
+## Preparing the dataset
+```{r}
+chic_crime <- read.table("D:/Study/Northeastern/Fall-2017/DM-ML/Homework/Project/Dataset/Chicago_Crimes_2012_to_2016.csv",header=TRUE,sep=",",fill=TRUE,colClasses = c('NULL',NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA))
+chic_crime = as.data.table(chic_crime)
+names(chic_crime) = tolower(names(chic_crime))
+chic_crime = chic_crime[year>2011&year<2017]
+chic_crime = chic_crime[complete.cases(chic_crime),]
+setkey(chic_crime,id)
+```
+
+## Creating Train Data
+```{r}
+ind_train = seq(1,dim(chic_crime)[1],by=10)
+train = chic_crime[ind_train]
+train = setkey(train,id)
+```
+
+## Creating Test Data
+```{r}
+ind_test = seq(2,length(ind_train),by=2)
+ind_test = ind_train[ind_test]-1
+test = chic_crime[ind_test]
+test = setkey(test,id)
+```
+
+## Training Data for Random Forest
+```{r}
+train[,cnt := 1]
+train[,month := substring(date,1,2)]
+train[,year := substring(date,7,10)]
+train[,time := substring(date,12,22)]
+train[,time := ifelse(grepl("PM",time),as.integer(substring(time,1,2))+12,as.integer(substring(time,1,2)))]
+train[,simpledate := paste(month,"01",year,sep="/")]
+train[,day := weekdays(as.Date(substring(date,1,10),format="%m/%d/%Y"))]
+sum_loc = train[,.(count =sum(cnt)),by=.(location.description)]
+cat_loc = head(sum_loc[order(count,decreasing=TRUE),],25)
+cat_loc = as.data.frame(cat_loc)
+cat_loc = as.character(cat_loc[,1])
+sum_type = train[,.(count = sum(cnt)),by=.(primary.type)]
+cat_type = head(sum_type[order(count,decreasing=TRUE),],25)
+cat_type = as.data.frame(cat_type)
+cat_type = as.character(cat_type[,1])
+train[,grouplocation := ifelse(location.description %in% cat_loc,as.character(location.description),'Non-Primary')]
+train[,groupprimtype := ifelse(primary.type %in% cat_type,as.character(primary.type),'Other')]
+```
+
+
+## Random Forest
+```{r}
+train_RF = train
+setkey(train_RF,id)
+train_RF$district = as.factor(train_RF$district)
+train_RF$grouplocation = as.factor(train_RF$grouplocation)
+train_RF$fbi.code = as.factor(train_RF$fbi.code)
+train_RF$ward = as.factor(train_RF$ward)
+train_RF$year = as.factor(train_RF$year)
+train_RF$time = as.factor(train_RF$time)
+train_RF$day = as.factor(train_RF$day)
+chic_crime_RF = randomForest(arrest ~ district + ward + grouplocation + year + day + fbi.code + time,mtry=2,ntree=1000,data=train_RF)
+chic_crime_RF
+```
+
+## k-Nearest Neighbors
+# Train and Test data for kNN
+```{r}
+train_KNN = train[,c("arrest","beat","district","ward","community.area")]
+train_KNN$arrest = as.logical(train_KNN$arrest)
+test_KNN = test[,c("arrest","beat","district","ward","community.area")]
+test_KNN$arrest = as.logical(test_KNN$arrest)
+```
+
+## Performing k-Nearest Neighbors
+```{r}
+testauto_KNN = knn(train = train_KNN, cl = train_KNN$arrest, test = test_KNN, k = 3)
+trainauto_KNN = knn(train = train_KNN, cl = train_KNN$arrest, test = train_KNN, k = 3)
+table(test_KNN$arrest,testauto_KNN)
+table(train_KNN$arrest,trainauto_KNN)
+```
